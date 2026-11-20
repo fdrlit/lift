@@ -155,14 +155,42 @@ function fresh() {
     ],
     settings:{name:'', goal:3, rest:90, theme:'blush', sound:true, wake:true, hint:true, backup:0, mine:[...MINE], seenReport:''} };
 }
+// Надёжность: битые данные не затираются (копия в lift.v1.broken), раз в день — автокопия
+// прошлого состояния (lift.v1.bak), запись сразу при сворачивании/закрытии приложения.
+const BAK = KEY + '.bak';
+let loadProblem = '';
+function ls(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); return true; } catch { return null; } }
+function hydrate(d) { const f = fresh(); return {...f, ...d, settings:{...f.settings, ...d.settings}}; }
 function load() {
-  try { const d = JSON.parse(localStorage.getItem(KEY)); if (d && Array.isArray(d.workouts)) { const f = fresh(); return {...f, ...d, settings:{...f.settings, ...d.settings}}; } } catch {}
+  const raw = ls(KEY);
+  if (raw) {
+    try { const d = JSON.parse(raw); if (d && Array.isArray(d.workouts)) return hydrate(d); throw 0; }
+    catch {
+      ls(KEY + '.broken.' + Date.now(), raw); // не теряем ничего
+      try { const b = JSON.parse(ls(BAK) || 'null'); if (b && Array.isArray(b.data.workouts)) { loadProblem = 'restored'; return hydrate(b.data); } } catch {}
+      loadProblem = 'broken';
+    }
+  }
   return fresh();
 }
 let db = load();
-let saveT;
-function save() { clearTimeout(saveT); try { localStorage.setItem(KEY, JSON.stringify(db)); } catch { toast('Не удалось сохранить — память переполнена'); } }
-function saveSoon() { clearTimeout(saveT); saveT = setTimeout(save, 400); }
+if (loadProblem === 'restored') ls(KEY, JSON.stringify(db));
+(function dailyBackup() {
+  const today = new Date().toDateString(), raw = ls(KEY);
+  try { const b = JSON.parse(ls(BAK) || 'null'); if (b && b.day === today) return; } catch {}
+  if (raw && !loadProblem) ls(BAK, JSON.stringify({day:today, t:Date.now(), data:JSON.parse(raw)}));
+})();
+let saveT, saveFail = false;
+function save() {
+  clearTimeout(saveT); saveT = null;
+  const ok = ls(KEY, JSON.stringify(db));
+  if (!ok && !saveFail) toast('Не получилось сохранить: память телефона заполнена. Сделай копию в профиле.');
+  saveFail = !ok;
+}
+function saveSoon() { clearTimeout(saveT); saveT = setTimeout(save, 300); }
+const flush = () => { if (saveT) save(); };
+addEventListener('pagehide', flush);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
 
 const ui = { tab:'home', sheets:[], q:'', grp:'mine', woOpen:false };
 
@@ -251,20 +279,34 @@ function vHome() {
   <div class="eyebrow">${cap(fDate(now, {weekday:'long', day:'numeric', month:'long'}))}</div>
   <h1>${S.name ? 'Привет, ' + esc(S.name) : 'Привет'}</h1>
   <div class="week">${days.map((d, i) => `<div class="wd ${trained.has(d.toDateString()) ? 'on' : ''} ${d > today ? 'fut' : ''} ${d.getTime() === today.getTime() ? 'today' : ''}"><span>${['Пн','Вт','Ср','Чт','Пт','Сб','Вс'][i]}</span><b class="n">${d.getDate()}</b></div>`).join('')}</div>
-  <p class="weeknote"><b>${wkW.length} из ${S.goal}</b> на этой неделе${left > 0 ? '' : ' — цель выполнена'}${streak > 1 ? ` · ${streak} ${plural(streak, 'неделя', 'недели', 'недель')} без пропусков` : ''}</p>
+  <p class="weeknote"><b>${wkW.length} из ${S.goal}</b> на этой неделе${left <= 0 ? ' — цель выполнена' : wkW.length ? ` · ещё ${left} до цели` : ''}${streak > 1 ? ` · ${streak} ${plural(streak, 'неделя', 'недели', 'недель')} подряд` : ''}</p>
   ${a ? `<button class="btn" data-a="openWo">Вернуться к тренировке</button>` : `<button class="btn" data-a="startMenu">Начать тренировку</button>`}
-  ${ios && !standalone && S.hint ? `<div class="row" style="margin-top:20px;align-items:flex-start"><p class="note grow">Чтобы открыть как приложение: Safari → «Поделиться» → «На экран Домой».</p><button class="ib" style="margin:-10px -10px 0 0" data-a="hideHint" aria-label="Скрыть">${ico('x')}</button></div>` : ''}
-  <div class="figs">
+  ${notices(ios, standalone)}
+  ${db.workouts.length ? `<div class="figs">
     <div><b class="n">${mW.length}</b><span>за месяц</span></div>
     <div><b class="n">${numU(vv, vu)}</b><span>тоннаж недели</span></div>
     <div><b class="n">${mW.reduce((x, w) => x + woPRs(w), 0)}</b><span>рекордов</span></div>
   </div>
-  ${monthCard()}
+  ${monthCard()}` : `<ol class="steps">
+    <li><b>Выбери шаблон</b> ниже — и отметь, что делаешь сегодня.</li>
+    <li><b>Отмечай подход</b> галочкой — таймер отдыха запустится сам.</li>
+    <li><b>В следующий раз</b> увидишь прошлые веса и подсказку, сколько попробовать.</li>
+  </ol>`}
   <div class="sec"><h2>Шаблоны</h2><button data-a="newTpl">Создать</button></div>
   <div class="list">${db.templates.map(t => `<div class="li"><button class="grow" data-a="tplEdit" data-id="${t.id}" style="min-width:0"><div class="t ell">${esc(t.name || 'Без названия')}</div><div class="s ell">${t.ex.length} ${plural(t.ex.length, 'упражнение', 'упражнения', 'упражнений')}${lastTpl(t) ? ' · ' + lastTpl(t) : ''}</div></button><button class="go" data-a="startTpl" data-id="${t.id}" aria-label="Начать «${esc(t.name)}»">${ico('play')}</button></div>`).join('') || `<p class="empty">Шаблон — это готовый список упражнений. Создай, чтобы начинать тренировку в одно касание.</p>`}</div>
-  ${prs.length ? `<div class="sec"><h2>Последние рекорды</h2></div><div class="list">${prs.map(p => { const e = exById(p.ex); return `<button class="li" data-a="exInfo" data-id="${e.id}"><div class="grow"><div class="t ell">${esc(e.name)}</div><div class="s">${fDate(p.t)}</div></div><span class="v n">${fSet(p.s, e.k)}</span></button>`; }).join('')}</div>` : ''}
-  <div class="sec"><h2>Активность</h2><span class="mut" style="font-size:14px">${db.workouts.length} ${plural(db.workouts.length, 'тренировка', 'тренировки', 'тренировок')}</span></div>
-  ${heat()}`;
+  ${prs.length ? `<div class="sec"><h2>Последние рекорды</h2></div><div class="list">${prs.map(p => { const e = exById(p.ex); return `<button class="li" data-a="exInfo" data-id="${e.id}"><div class="grow"><div class="t ell">${esc(e.name)}</div><div class="s">${fDate(p.t)}</div></div><span class="v n">${fSet(p.s, e.k)}<span class="pr">PR</span></span></button>`; }).join('')}</div>` : ''}
+  ${db.workouts.length ? `<div class="sec"><h2>Активность</h2><span class="mut" style="font-size:14px">${db.workouts.length} ${plural(db.workouts.length, 'тренировка', 'тренировки', 'тренировок')}</span></div>
+  ${heat()}` : ''}`;
+}
+// важные предупреждения про сохранность данных
+function notices(ios, standalone) {
+  const S = db.settings, out = [];
+  if (loadProblem === 'restored') out.push(['warn', 'Данные были повреждены — восстановила последнюю автокопию. Проверь последние тренировки.', 'hideProblem']);
+  if (loadProblem === 'broken') out.push(['warn', 'Сохранённые данные повреждены, копии нет. Если у тебя есть файл копии — восстанови его в профиле.', 'hideProblem']);
+  if (ios && !standalone && S.hint) out.push(['info', 'Ты в Safari. Данные здесь и в приложении на экране «Домой» хранятся отдельно — пользуйся только приложением. Добавить: «Поделиться» → «На экран „Домой“».', 'hideHint']);
+  const old = Date.now() - (S.backup || 0) > 14 * 864e5;
+  if (db.workouts.length >= 4 && old) out.push(['info', `${S.backup ? 'Последняя копия была давно' : 'У тебя ещё нет копии данных'}. Сохрани её в «Файлы» или iCloud — на случай смены телефона.`, null, 'export', 'Сохранить копию']);
+  return out.map(([kind, text, hide, act, label]) => `<div class="notice ${kind}"><p>${text}</p>${act ? `<button class="btn sm" data-a="${act}">${label}</button>` : ''}${hide ? `<button class="ib" data-a="${hide}" aria-label="Скрыть">${ico('x')}</button>` : ''}</div>`).join('');
 }
 function monthCard() {
   const now = mKey(Date.now()), pk = now - 1;
@@ -383,10 +425,11 @@ function vMe() {
   <div class="sec"><h2>Данные</h2></div>
   <div class="group">
     ${r('Сохранить копию', `<span class="v">${bk}</span>`, 'export')}
-    ${r('Восстановить из копии', '', 'import')}
+    ${r('Восстановить из файла копии', '', 'import')}
+    ${(b => b ? r('Вернуть автокопию', `<span class="v">${fDate(b.t, {day:'numeric', month:'short'})}</span>`, 'restoreBak') : '')((() => { try { return JSON.parse(ls(BAK) || 'null'); } catch { return null; } })())}
     ${r('Удалить все данные', '', 'wipe', '', 'red')}
   </div>
-  <p class="foot">Всё хранится только на этом телефоне. Сохраняй копию раз в пару недель — пригодится при смене телефона.</p>`;
+  <p class="foot">Всё хранится только на этом телефоне и сохраняется сразу. Раз в день приложение само делает автокопию. Файл копии раз в пару недель — на случай смены телефона.</p>`;
 }
 
 // ---------- тренировка
@@ -431,13 +474,23 @@ function vWo() {
     </div>
   </div>`;
 }
+// двойная прогрессия: все рабочие подходы на максимальном весе с одинаковыми повторами — прибавь вес, иначе добей повторы
+function suggest(last, k) {
+  const ws = workSets(last); if (!ws.length) return '';
+  if (k === 't') return Math.max(...ws.map(x => x.r || 0)) + 5 + ' сек';
+  if (k === 'bw') { const r = Math.max(...ws.map(x => x.r || 0)); const w = Math.max(...ws.map(x => x.w || 0)); return (w ? '+' + f1(w) + ' × ' : '') + (r + 1); }
+  const top = Math.max(...ws.map(x => x.w || 0)); if (!top) return '';
+  const at = ws.filter(x => x.w === top), lo = Math.min(...at.map(x => x.r)), hi = Math.max(...at.map(x => x.r));
+  if (lo === hi && at.length > 1) return f1(top + (top >= 10 ? 2.5 : 1)) + ' × ' + lo;
+  return f1(top) + ' × ' + hi + ' во всех';
+}
 function wex(it, ei) {
   const e = exById(it.ex), k = e.k;
   const last = lastSession(it.ex, db.active.wid);
   const lb = last && (workSets(last).reduce((x, s) => score(s, k) > score(x, k) ? s : x, workSets(last)[0]) || last.sets[0]);
   let n = 0;
   return `<section class="wex">
-    <div class="hd"><button class="nm" data-a="exInfo" data-id="${e.id}"><h3>${esc(e.name)}</h3><small>${lb ? `В прошлый раз <span class="n">${fSet(lb, k)}</span>` : GROUPS[e.g]}</small></button>
+    <div class="hd"><button class="nm" data-a="exInfo" data-id="${e.id}"><h3>${esc(e.name)}</h3><small>${lb ? `Было <span class="n">${fSet(lb, k)}</span>${db.active.wid ? '' : (sg => sg ? ` · <span class="goal">цель <span class="n">${sg}</span></span>` : '')(suggest(last, k))}` : GROUPS[e.g] + ' · первый раз'}</small></button>
       <button class="ib" data-a="exMenu" data-e="${ei}" aria-label="Действия с упражнением" style="margin-right:-8px">${ico('more')}</button></div>
     <div class="sets">
       <div class="sh"><span></span><span>Прошлый</span><span>${k === 'bw' ? '+кг' : k === 't' ? '' : 'кг'}</span><span>${k === 't' ? 'сек' : 'повт'}</span><span></span></div>
@@ -445,7 +498,7 @@ function wex(it, ei) {
         return `<div class="set ${s.d ? 'done' : ''} ${s.wu ? 'wu' : ''}">
           <button class="sn n" data-a="setType" data-e="${ei}" data-s="${si}" aria-label="Разминка или рабочий">${s.wu ? 'Р' : n}</button>
           <button class="prev n" data-a="usePrev" data-e="${ei}" data-s="${si}">${p ? fSet(p, k) : '—'}${s.pr ? '<span class="pr">PR</span>' : ''}</button>
-          ${k === 't' ? '<span class="na">—</span>' : `<input class="in n" inputmode="decimal" data-f="w" data-e="${ei}" data-s="${si}" value="${s.w ?? ''}" placeholder="${ph && ph.w ? f1(ph.w).replace(/\s/g, '') : k === 'bw' ? '0' : ''}" aria-label="Вес">`}
+          ${k === 't' ? '<span class="na">—</span>' : `<input class="in n" inputmode="decimal" data-f="w" data-e="${ei}" data-s="${si}" value="${s.w == null ? '' : String(s.w).replace('.', ',')}" placeholder="${ph && ph.w ? f1(ph.w).replace(/\s/g, '') : k === 'bw' ? '0' : ''}" aria-label="Вес">`}
           <input class="in n" inputmode="numeric" pattern="[0-9]*" data-f="r" data-e="${ei}" data-s="${si}" value="${s.r ?? ''}" placeholder="${ph && ph.r ? ph.r : ''}" aria-label="${k === 't' ? 'Секунды' : 'Повторы'}">
           <button class="ck" data-a="check" data-e="${ei}" data-s="${si}" aria-label="Подход выполнен">${ico('check')}</button>
         </div>`; }).join('')}
@@ -508,7 +561,7 @@ function tick() {
   if (!a.wid) document.querySelectorAll('[data-clock]').forEach(el => el.textContent = fClock(now - a.start));
   if (a.restEnd) {
     const left = a.restEnd - now;
-    if (left <= 0) { a.restEnd = 0; save(); beep(); toast('Отдых закончился'); r.classList.remove('on'); return; }
+    if (left <= 0) { a.restEnd = 0; save(); beep(); haptic(); toast('Отдых закончился'); r.classList.remove('on'); return; }
     if (!r.firstChild) r.innerHTML = `<div class="bar" id="rbar"></div><div class="t"><b class="n" id="rtime"></b><span>отдых</span></div>
       <button class="n" data-a="restAdd" data-v="-15" aria-label="Минус 15 секунд">−15</button><button class="n" data-a="restAdd" data-v="15" aria-label="Плюс 15 секунд">+15</button><button data-a="restSkip">Пропустить</button>`;
     $('#rtime').textContent = fClock(left + 999);
@@ -654,6 +707,14 @@ SH.ex = s => {
   ${custom ? `<button class="btn del" data-a="delEx" data-id="${e.id}" style="margin-top:14px">Удалить упражнение</button>` : ''}`;
 };
 
+SH.tplStart = s => {
+  const t = db.templates.find(x => x.id === s.id); if (!t) return '';
+  const last = db.workouts.find(w => w.tpl === t.id);
+  return `<div class="shd"><div><h3>${esc(t.name)}</h3><p>Что делаешь сегодня?${last ? ' Отмечено то, что было в прошлый раз.' : ''}</p></div><button class="btn sm sec2" data-a="tsAll">${s.sel.length === t.ex.length ? 'Снять все' : 'Все'}</button></div>
+  ${t.ex.map(id => { const e = exById(id), l = lastSession(id); const b = l && workSets(l).reduce((x, st) => score(st, e.k) > score(x, e.k) ? st : x, workSets(l)[0]);
+    return `<button class="pick ${s.sel.includes(id) ? 'on' : ''}" data-a="tsT" data-id="${id}"><div class="grow"><div style="font-size:16.5px;font-weight:500">${esc(e.name)}</div><div class="mut" style="font-size:13.5px">${b ? 'В прошлый раз <span class="n" style="font-size:15px">' + fSet(b, e.k) + '</span>' : GROUPS[e.g]}</div></div><span class="cb">${ico('check')}</span></button>`; }).join('')}
+  <div class="stick"><button class="btn" data-a="tsGo" ${s.sel.length ? '' : 'disabled'}>${s.sel.length ? `Начать · ${s.sel.length} ${plural(s.sel.length, 'упражнение', 'упражнения', 'упражнений')}` : 'Отметь упражнения'}</button></div>`;
+};
 SH.wo = s => {
   const w = db.workouts.find(x => x.id === s.id); if (!w) return '<p class="empty">Тренировка удалена</p>';
   const [v, u] = volParts(woVol(w));
@@ -681,10 +742,23 @@ SH.sum = s => {
   const w = db.workouts.find(x => x.id === s.id); if (!w) return '';
   const prs = []; w.items.forEach(it => it.sets.forEach(st => st.pr && prs.push({e:exById(it.ex), st})));
   const [v, u] = volParts(woVol(w));
-  return `<div class="sum"><p class="mut" style="font-size:15px">Тренировка сохранена · ${db.workouts.length}-я по счёту</p>
-    <div class="big n" style="margin-top:14px">${v}<small>${u}</small></div><p class="mut" style="font-size:14px">общий тоннаж</p></div>
-  <div class="figs"><div><b class="n">${numU(Math.max(1, Math.round((w.end - w.start) / 60000)), 'мин')}</b><span>время</span></div><div><b class="n">${woSets(w)}</b><span>подходов</span></div><div><b class="n">${prs.length}</b><span>рекордов</span></div></div>
-  ${prs.length ? `<div class="sec" style="margin-top:30px"><h2>Новые рекорды</h2></div><div class="list">${prs.map(p => `<div class="li"><div class="grow t ell">${esc(p.e.name)}</div><span class="v n">${fSet(p.st, p.e.k)}</span></div>`).join('')}</div>` : ''}
+  // сравнение с прошлым разом: та же тренировка (шаблон или название) и каждое упражнение отдельно
+  const prev = db.workouts.find(x => x.start < w.start && (w.tpl ? x.tpl === w.tpl : x.name === w.name));
+  const dv = prev ? pct(woVol(w), woVol(prev)) : null;
+  let better = 0, cmp = 0;
+  for (const it of w.items) {
+    const e = exById(it.ex), before = db.workouts.find(x => x.start < w.start && x.items.some(i => i.ex === it.ex)); if (!before) continue;
+    const best = arr => Math.max(0, ...workSets(arr).map(st => score(st, e.k)));
+    cmp++; if (best(it) > best(before.items.find(i => i.ex === it.ex))) better++;
+  }
+  const wk = db.workouts.filter(x => x.start >= weekStart(w.start)).length, goal = db.settings.goal;
+  const head = db.workouts.length === 1 ? 'Первая тренировка в дневнике' : prs.length ? `${prs.length} ${plural(prs.length, 'новый рекорд', 'новых рекорда', 'новых рекордов')}` : better ? `Сильнее в ${better} из ${cmp} ${plural(cmp, 'упражнения', 'упражнений', 'упражнений')}` : dv > 0 ? 'Больше, чем в прошлый раз' : 'Тренировка засчитана';
+  return `<div class="sum"><p class="mut" style="font-size:15px">Сохранено · ${db.workouts.length}-я тренировка</p>
+    <h2 class="sumh">${head}</h2>
+    <div class="big n" style="margin-top:18px">${v}<small>${u}</small></div><p class="mut" style="font-size:14px">тоннаж${dv !== null ? ` · <span class="${dv >= 0 ? 'acc' : ''}">${sgn(dv)}%</span> к прошлому разу` : ''}</p></div>
+  <div class="figs"><div><b class="n">${numU(Math.max(1, Math.round((w.end - w.start) / 60000)), 'мин')}</b><span>время</span></div><div><b class="n">${woSets(w)}</b><span>подходов</span></div><div><b class="n">${wk}/${goal}</b><span>${wk >= goal ? 'цель недели ✓' : 'цель недели'}</span></div></div>
+  <p class="note" style="margin-top:12px">${wk >= goal ? 'Цель недели выполнена. Всё, что дальше, — сверх плана.' : `Ещё ${goal - wk} ${plural(goal - wk, 'тренировка', 'тренировки', 'тренировок')} — и неделя закрыта.`}</p>
+  ${prs.length ? `<div class="sec" style="margin-top:30px"><h2>Новые рекорды</h2></div><div class="list">${prs.map(p => `<div class="li"><div class="grow t ell">${esc(p.e.name)}</div><span class="v n">${fSet(p.st, p.e.k)}<span class="pr">PR</span></span></div>`).join('')}</div>` : ''}
   <div class="acts"><button class="btn" data-a="close">Готово</button>${w.tpl ? '' : `<button class="btn link" data-a="saveTpl" data-id="${w.id}">Сохранить как шаблон</button>`}</div>`;
 };
 
@@ -759,6 +833,9 @@ document.addEventListener('touchend', () => {
   else sh.style.transform = '';
 });
 
+// лёгкий отклик: Android — vibrate, iPhone (iOS 18+) — переключатель-switch даёт системный тактильный щелчок
+const hapticEl = (() => { const l = document.createElement('label'); l.setAttribute('aria-hidden', 'true'); l.style.cssText = 'position:fixed;left:-99px;top:0;opacity:0;pointer-events:none'; l.innerHTML = '<input type="checkbox" switch tabindex="-1">'; document.body.appendChild(l); return l; })();
+function haptic() { try { if (!(navigator.vibrate && navigator.vibrate(12))) hapticEl.click(); } catch {} }
 let toastT;
 function toast(html) { const t = $('#toast'); t.innerHTML = html; t.className = 'on'; clearTimeout(toastT); toastT = setTimeout(() => t.className = '', 2600); }
 
@@ -789,10 +866,21 @@ A.month = el => { const k = el.dataset.k ? +el.dataset.k : undefined; openSheet(
 A.mNav = el => { const s = topS(), keys = monthKeys(), i = keys.indexOf(s.k ?? keys.at(-1)) + +el.dataset.v; if (keys[i] === undefined) return; s.k = keys[i]; renderSheets(); document.querySelector('#sheets .sw:last-child .sheet').scrollTop = 0; };
 A.tab = el => { if (ui.tab === el.dataset.v) { $('#main').scrollTo({top:0, behavior:'smooth'}); return; } ui.tab = el.dataset.v; $('#main').scrollTop = 0; render(); };
 A.close = () => closeSheet();
+A.hideProblem = () => { loadProblem = ''; render(); };
 A.hideHint = () => { db.settings.hint = false; save(); render(); };
 A.startMenu = () => openSheet({t:'start'});
 A.startEmpty = () => startWo([], '');
-A.startTpl = el => { const t = db.templates.find(x => x.id === el.dataset.id); if (t && t.ex.length) startWo(t.ex, t.name, t.id); };
+A.startTpl = el => {
+  const t = db.templates.find(x => x.id === el.dataset.id); if (!t || !t.ex.length) return;
+  if (t.ex.length <= 5) return startWo(t.ex, t.name, t.id);
+  // длинный шаблон = пул упражнений: спрашиваем, что сегодня; отмечено то, что делала в прошлый раз
+  const last = db.workouts.find(w => w.tpl === t.id);
+  const sel = last ? t.ex.filter(id => last.items.some(i => i.ex === id)) : [];
+  openSheet({t:'tplStart', id:t.id, sel, full:true});
+};
+A.tsT = el => { const s = topS(), id = el.dataset.id, i = s.sel.indexOf(id); i < 0 ? s.sel.push(id) : s.sel.splice(i, 1); refreshTop(); };
+A.tsAll = () => { const s = topS(), t = db.templates.find(x => x.id === s.id); s.sel = s.sel.length === t.ex.length ? [] : [...t.ex]; refreshTop(); };
+A.tsGo = () => { const s = topS(), t = db.templates.find(x => x.id === s.id); startWo(t.ex.filter(id => s.sel.includes(id)), t.name, t.id); };
 A.repeat = el => { const w = db.workouts.find(x => x.id === el.dataset.id); if (w) startWo(w.items.map(i => i.ex), w.name, w.tpl); };
 A.openWo = () => { ui.woOpen = true; ui.sheets = []; render(); wake(); };
 A.minWo = () => { ui.woOpen = false; render(); };
@@ -823,7 +911,7 @@ A.check = el => {
   if (s.r == null) s.r = ph?.r ?? null;
   if (!s.r) { toast(e.k === 't' ? 'Впиши время в секундах' : 'Впиши количество повторов'); return; }
   if (e.k === 'w' && !s.w) { toast('Впиши вес'); return; }
-  s.d = true;
+  s.d = true; haptic();
   if (!s.wu && !db.active.wid) {
     const prev = bestScore(it.ex, db.active.wid), cur = Math.max(...it.sets.filter((x, i) => x.d && !x.wu && i !== si).map(x => score(x, e.k)), 0);
     if (prev > 0 && score(s, e.k) > Math.max(prev, cur)) { it.sets.forEach(x => x.pr = false); s.pr = true; toast(`<span class="pr">PR</span>${esc(e.name)} — <span class="n">${fSet(s, e.k)}</span>`); }
@@ -883,6 +971,11 @@ A.export = async () => {
   const done = () => { db.settings.backup = Date.now(); save(); render(); toast('Копия сохранена'); };
   if (navigator.canShare?.({files:[file]})) { try { await navigator.share({files:[file], title:'Lift — копия данных'}); done(); return; } catch (e) { if (e.name === 'AbortError') return; } }
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); done();
+};
+A.restoreBak = () => {
+  let b; try { b = JSON.parse(ls(BAK)); } catch { return; }
+  if (!confirm(`Вернуть данные к автокопии от ${fDate(b.t, {day:'numeric', month:'long'})}? В ней ${b.data.workouts.length} ${plural(b.data.workouts.length, 'тренировка', 'тренировки', 'тренировок')}. Всё, что сделано после, пропадёт.`)) return;
+  ls(KEY + '.before-restore', JSON.stringify(db)); db = hydrate(b.data); recomputePR(); save(); render(); toast('Данные возвращены к автокопии');
 };
 A.import = () => $('#file').click();
 $('#file').addEventListener('change', async e => {
