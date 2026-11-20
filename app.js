@@ -268,7 +268,7 @@ function vHome() {
   for (;;) { const we = ws + 7 * day + 3600e3; if (db.workouts.some(w => w.start >= ws && w.start < we)) { streak++; ws = weekStart(ws - day); } else break; }
   const mStart = new Date(today); mStart.setDate(1);
   const mW = db.workouts.filter(w => w.start >= mStart.getTime());
-  const [vv, vu] = volParts(wkW.reduce((x, w) => x + woVol(w), 0));
+  const [vv, vu] = volParts(mW.reduce((x, w) => x + woVol(w), 0));
   const left = S.goal - wkW.length;
   const ios = /iPhone|iPad|iPod/.test(navigator.userAgent), standalone = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
   const prs = [];
@@ -276,16 +276,16 @@ function vHome() {
   const a = db.active;
   const days = Array.from({length:7}, (_, i) => { const d = new Date(wk); d.setDate(d.getDate() + i); return d; });
   return `
-  <div class="eyebrow">${cap(fDate(now, {weekday:'long', day:'numeric', month:'long'}))}</div>
+  <div class="eyebrow toprow"><span>${cap(fDate(now, {weekday:'long', day:'numeric', month:'long'}))}</span>${streak > 1 ? `<span class="streak">${streak} ${plural(streak, 'неделя', 'недели', 'недель')} подряд</span>` : ''}</div>
   <h1>${S.name ? 'Привет, ' + esc(S.name) : 'Привет'}</h1>
   <div class="week">${days.map((d, i) => `<button class="wd ${trained.has(d.toDateString()) ? 'on' : ''} ${d > today ? 'fut' : ''} ${d.getTime() === today.getTime() ? 'today' : ''}" data-a="day" data-t="${d.getTime()}" aria-label="${fDate(d)}"><span>${['Пн','Вт','Ср','Чт','Пт','Сб','Вс'][i]}</span><b class="n">${d.getDate()}</b></button>`).join('')}</div>
-  <p class="weeknote"><b>${wkW.length} из ${S.goal}</b> на этой неделе${left <= 0 ? ' — цель выполнена' : wkW.length ? ` · ещё ${left} до цели` : ''}${streak > 1 ? ` · ${streak} ${plural(streak, 'неделя', 'недели', 'недель')} подряд` : ''}</p>
+  <p class="weeknote"><b>${wkW.length} из ${S.goal}</b> на этой неделе${left <= 0 ? ' — цель выполнена' : wkW.length ? ` · ещё ${left} до цели` : ''}</p>
   ${a ? `<button class="btn" data-a="openWo">Вернуться к тренировке</button>` : `<button class="btn" data-a="startMenu">Начать тренировку</button>`}
   ${notices(ios, standalone)}
-  ${db.workouts.length ? `<div class="figs">
-    <div><b class="n">${mW.length}</b><span>за месяц</span></div>
-    <div><b class="n">${numU(vv, vu)}</b><span>тоннаж недели</span></div>
-    <div><b class="n">${mW.reduce((x, w) => x + woPRs(w), 0)}</b><span>рекордов</span></div>
+  ${db.workouts.length ? `<div class="sec" style="margin-top:34px"><h2>В ${MONTHS_PREP[new Date().getMonth()]}</h2></div><div class="figs" style="margin-top:0;border:0;padding-top:4px">
+    <div><b class="n">${mW.length}</b><span>${plural(mW.length, 'тренировка', 'тренировки', 'тренировок')}</span></div>
+    <div><b class="n">${numU(vv, vu)}</b><span>тоннаж</span></div>
+    <div><b class="n">${mW.reduce((x, w) => x + woPRs(w), 0)}</b><span>${plural(mW.reduce((x, w) => x + woPRs(w), 0), 'рекорд', 'рекорда', 'рекордов')}</span></div>
   </div>
   ${monthCard()}` : `<ol class="steps">
     <li><b>Выбери шаблон</b> ниже — и отметь, что делаешь сегодня.</li>
@@ -476,14 +476,22 @@ function vWo() {
   </div>`;
 }
 // двойная прогрессия: все рабочие подходы на максимальном весе с одинаковыми повторами — прибавь вес, иначе добей повторы
+// прошлый раз целиком: «30 × 10·10·9», если вес во всех рабочих подходах одинаковый
+function wasStr(last, k) {
+  const ws = workSets(last); if (!ws.length) return '';
+  if (k === 't') return ws.map(x => x.r).join('·') + ' сек';
+  const w = ws[0].w || 0;
+  if (!ws.every(x => (x.w || 0) === w)) return '';
+  return (k === 'bw' ? (w ? '+' + f1(w) + ' × ' : '') : f1(w) + ' × ') + ws.map(x => x.r).join('·');
+}
 function suggest(last, k) {
   const ws = workSets(last); if (!ws.length) return '';
   if (k === 't') return Math.max(...ws.map(x => x.r || 0)) + 5 + ' сек';
-  if (k === 'bw') { const r = Math.max(...ws.map(x => x.r || 0)); const w = Math.max(...ws.map(x => x.w || 0)); return (w ? '+' + f1(w) + ' × ' : '') + (r + 1); }
+  if (k === 'bw') { const r = Math.max(...ws.map(x => x.r || 0)); const w = Math.max(...ws.map(x => x.w || 0)); return (w ? '+' + f1(w) + ' × ' + (r + 1) : (r + 1) + '</span> ' + plural(r + 1, 'повтор', 'повтора', 'повторов') + '<span>'); }
   const top = Math.max(...ws.map(x => x.w || 0)); if (!top) return '';
   const at = ws.filter(x => x.w === top), lo = Math.min(...at.map(x => x.r)), hi = Math.max(...at.map(x => x.r));
   if (lo === hi && at.length > 1) return f1(top + (top >= 10 ? 2.5 : 1)) + ' × ' + lo;
-  return f1(top) + ' × ' + hi + ' во всех';
+  return f1(top) + ' × ' + hi + '</span> в каждом подходе<span>';
 }
 function wex(it, ei) {
   const e = exById(it.ex), k = e.k;
@@ -491,7 +499,7 @@ function wex(it, ei) {
   const lb = last && (workSets(last).reduce((x, s) => score(s, k) > score(x, k) ? s : x, workSets(last)[0]) || last.sets[0]);
   let n = 0;
   return `<section class="wex">
-    <div class="hd"><button class="nm" data-a="exInfo" data-id="${e.id}"><h3>${esc(e.name)}</h3><small>${lb ? `Было <span class="n">${fSet(lb, k)}</span>${db.active.wid ? '' : (sg => sg ? ` · <span class="goal">цель <span class="n">${sg}</span></span>` : '')(suggest(last, k))}` : GROUPS[e.g] + ' · первый раз'}</small></button>
+    <div class="hd"><button class="nm" data-a="exInfo" data-id="${e.id}"><h3>${esc(e.name)}</h3><small>${lb ? `Было <span class="n">${wasStr(last, k) || fSet(lb, k)}</span>${db.active.wid ? '' : (sg => sg ? ` · <span class="goal">цель <span class="n">${sg}</span></span>` : '')(suggest(last, k))}` : GROUPS[e.g] + ' · первый раз'}</small></button>
       <button class="ib" data-a="exMenu" data-e="${ei}" aria-label="Действия с упражнением" style="margin-right:-8px">${ico('more')}</button></div>
     <div class="sets">
       <div class="sh"><span></span><span>Прошлый</span><span>${k === 'bw' ? '+кг' : k === 't' ? '' : 'кг'}</span><span>${k === 't' ? 'сек' : 'повт'}</span><span></span></div>
@@ -761,7 +769,8 @@ SH.sum = s => {
   const [v, u] = volParts(woVol(w));
   // сравнение с прошлым разом: та же тренировка (шаблон или название) и каждое упражнение отдельно
   const prev = db.workouts.find(x => x.start < w.start && (w.tpl ? x.tpl === w.tpl : x.name === w.name));
-  const dv = prev ? pct(woVol(w), woVol(prev)) : null;
+  const same = prev && prev.items.length === w.items.length && w.items.every(it => prev.items.some(i => i.ex === it.ex));
+  const dv = same ? pct(woVol(w), woVol(prev)) : null;
   let better = 0, cmp = 0;
   for (const it of w.items) {
     const e = exById(it.ex), before = db.workouts.find(x => x.start < w.start && x.items.some(i => i.ex === it.ex)); if (!before) continue;
@@ -769,10 +778,10 @@ SH.sum = s => {
     cmp++; if (best(it) > best(before.items.find(i => i.ex === it.ex))) better++;
   }
   const wk = db.workouts.filter(x => x.start >= weekStart(w.start)).length, goal = db.settings.goal;
-  const head = db.workouts.length === 1 ? 'Первая тренировка в дневнике' : prs.length ? `${prs.length} ${plural(prs.length, 'новый рекорд', 'новых рекорда', 'новых рекордов')}` : better ? `Сильнее в ${better} из ${cmp} ${plural(cmp, 'упражнения', 'упражнений', 'упражнений')}` : dv > 0 ? 'Больше, чем в прошлый раз' : 'Тренировка засчитана';
+  const head = db.workouts.length === 1 ? 'Первая тренировка в дневнике' : prs.length ? `${prs.length} ${plural(prs.length, 'новый рекорд', 'новых рекорда', 'новых рекордов')}` : better ? `Сильнее в ${better} из ${cmp} ${plural(cmp, 'упражнения', 'упражнений', 'упражнений')}` : dv > 0 ? 'Больше, чем в прошлый раз' : cmp ? 'Держишь уровень' : 'Тренировка засчитана';
   return `<div class="sum"><p class="mut" style="font-size:15px">Сохранено · ${db.workouts.length}-я тренировка</p>
     <h2 class="sumh">${head}</h2>
-    <div class="big n" style="margin-top:18px">${v}<small>${u}</small></div><p class="mut" style="font-size:14px">тоннаж${dv !== null ? ` · <span class="${dv >= 0 ? 'acc' : ''}">${sgn(dv)}%</span> к прошлому разу` : ''}</p></div>
+    <div class="big n" style="margin-top:18px">${v}<small>${u}</small></div><p class="mut" style="font-size:14px">тоннаж${dv > 0 ? ` · <span class="acc">${sgn(dv)}%</span> к прошлому разу` : ''}</p></div>
   <div class="figs"><div><b class="n">${numU(Math.max(1, Math.round((w.end - w.start) / 60000)), 'мин')}</b><span>время</span></div><div><b class="n">${woSets(w)}</b><span>подходов</span></div><div><b class="n">${wk}/${goal}</b><span>${wk >= goal ? 'цель недели ✓' : 'цель недели'}</span></div></div>
   <p class="note" style="margin-top:12px">${wk >= goal ? 'Цель недели выполнена. Всё, что дальше, — сверх плана.' : `Ещё ${goal - wk} ${plural(goal - wk, 'тренировка', 'тренировки', 'тренировок')} — и неделя закрыта.`}</p>
   ${prs.length ? `<div class="sec" style="margin-top:30px"><h2>Новые рекорды</h2></div><div class="list">${prs.map(p => `<div class="li"><div class="grow t ell">${esc(p.e.name)}</div><span class="v n">${fSet(p.st, p.e.k)}<span class="pr">PR</span></span></div>`).join('')}</div>` : ''}
@@ -820,7 +829,7 @@ SH.orm = s => {
 
 function renderSheets() {
   const keep = [...document.querySelectorAll('#sheets .sheet')].map(el => el.scrollTop);
-  $('#sheets').innerHTML = ui.sheets.map((s, i) => `<div class="sw ${s._new ? 'in' : ''}" style="z-index:${100 + i}"><div class="scrim" data-a="close"></div><div class="sheet ${s.full ? 'full' : ''}" role="dialog" aria-modal="true"><div class="grab"></div>${SH[s.t](s)}</div></div>`).join('');
+  $('#sheets').innerHTML = ui.sheets.map((s, i) => `<div class="sw ${s._new ? 'in' : ''}" style="z-index:${100 + i}"><div class="scrim" data-a="close"></div><div class="sheet ${s.full ? 'full' : ''}" role="dialog" aria-modal="true"><div class="grab">${s.full ? `<button class="shx" data-a="close" aria-label="Закрыть">${ico('x')}</button>` : ''}</div>${SH[s.t](s)}</div></div>`).join('');
   document.querySelectorAll('#sheets .sheet').forEach((el, i) => { if (keep[i] && !ui.sheets[i]._new) el.scrollTop = keep[i]; });
   ui.sheets.forEach(s => delete s._new);
 }
