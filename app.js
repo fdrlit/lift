@@ -278,7 +278,7 @@ function vHome() {
   return `
   <div class="eyebrow">${cap(fDate(now, {weekday:'long', day:'numeric', month:'long'}))}</div>
   <h1>${S.name ? 'Привет, ' + esc(S.name) : 'Привет'}</h1>
-  <div class="week">${days.map((d, i) => `<div class="wd ${trained.has(d.toDateString()) ? 'on' : ''} ${d > today ? 'fut' : ''} ${d.getTime() === today.getTime() ? 'today' : ''}"><span>${['Пн','Вт','Ср','Чт','Пт','Сб','Вс'][i]}</span><b class="n">${d.getDate()}</b></div>`).join('')}</div>
+  <div class="week">${days.map((d, i) => `<button class="wd ${trained.has(d.toDateString()) ? 'on' : ''} ${d > today ? 'fut' : ''} ${d.getTime() === today.getTime() ? 'today' : ''}" data-a="day" data-t="${d.getTime()}" aria-label="${fDate(d)}"><span>${['Пн','Вт','Ср','Чт','Пт','Сб','Вс'][i]}</span><b class="n">${d.getDate()}</b></button>`).join('')}</div>
   <p class="weeknote"><b>${wkW.length} из ${S.goal}</b> на этой неделе${left <= 0 ? ' — цель выполнена' : wkW.length ? ` · ещё ${left} до цели` : ''}${streak > 1 ? ` · ${streak} ${plural(streak, 'неделя', 'недели', 'недель')} подряд` : ''}</p>
   ${a ? `<button class="btn" data-a="openWo">Вернуться к тренировке</button>` : `<button class="btn" data-a="startMenu">Начать тренировку</button>`}
   ${notices(ios, standalone)}
@@ -332,7 +332,7 @@ function heat() {
     const d = new Date(start); d.setDate(start.getDate() + i);
     if (i % 7 === 0 && d.getMonth() !== lastM) { months.push(d.toLocaleDateString('ru-RU', {month:'short'}).replace('.', '')); lastM = d.getMonth(); }
     const v = map[d.toDateString()] || 0;
-    cells += `<i class="${!v ? '' : v <= t1 ? 'l1' : v <= t2 ? 'l2' : 'l3'}${d > today ? ' f' : ''}${d.getTime() === today.getTime() ? ' t' : ''}"></i>`;
+    cells += `<i class="${!v ? '' : v <= t1 ? 'l1' : v <= t2 ? 'l2' : 'l3'}${d > today ? ' f' : ''}${d.getTime() === today.getTime() ? ' t' : ''}" data-a="day" data-t="${d.getTime()}"></i>`;
   }
   return `<div class="heat">${cells}</div><div class="heatm">${months.map(m => `<span>${m}</span>`).join('')}</div>`;
 }
@@ -438,9 +438,10 @@ function newSets(ex) {
   const n = last ? last.sets.length : 3;
   return Array.from({length:Math.max(1, Math.min(n, 10))}, (_, i) => ({w:null, r:null, d:false, wu:!!(last && last.sets[i] && last.sets[i].wu)}));
 }
-function startWo(exIds, name, tpl) {
-  if (db.active && !confirm('Уже идёт тренировка. Удалить её и начать новую?')) return;
+function startWo(exIds, name, tpl, back) {
+  if (db.active && !confirm(db.active.wid ? 'Сейчас открыто редактирование другой тренировки. Отменить его?' : 'Уже идёт тренировка. Удалить её и начать новую?')) return;
   db.active = {start:Date.now(), name:name || defName(), tpl:tpl || null, items:exIds.map(ex => ({ex, sets:newSets(ex)})), restEnd:0, restTot:0};
+  if (back) Object.assign(db.active, {wid:uid(), back:true, start:back.start, end:back.end, name:name || 'Тренировка'});
   ui.sheets = []; ui.woOpen = true; save(); render(); wake();
 }
 function defName() { const h = new Date().getHours(); return h < 12 ? 'Утренняя тренировка' : h < 17 ? 'Дневная тренировка' : 'Вечерняя тренировка'; }
@@ -460,7 +461,7 @@ function vWo() {
   const a = db.active; if (!a) return '';
   return `<div class="wohd">
     <button class="ib" data-a="minWo" aria-label="Свернуть">${ico('down')}</button>
-    <div class="clock n">${a.wid ? fDate(a.start) + '<small>редактирование</small>' : `<span data-clock>${fClock(Date.now() - a.start)}</span><small>идёт тренировка</small>`}</div>
+    <div class="clock n">${a.wid ? fDate(a.start) + `<small>${a.back ? 'задним числом' : 'редактирование'}</small>` : `<span data-clock>${fClock(Date.now() - a.start)}</span><small>идёт тренировка</small>`}</div>
     <div class="row" style="gap:2px">${a.wid ? '' : `<button class="ib" data-a="restStart" aria-label="Таймер отдыха">${ico('timer')}</button>`}<button class="btn sm" data-a="finish">${a.wid ? 'Сохранить' : 'Завершить'}</button></div>
   </div>
   <div class="wobody" id="wobody">
@@ -517,8 +518,8 @@ function renderWo() {
 }
 function finish() {
   const a = db.active;
-  const items = a.items.map(it => ({ex:it.ex, sets:it.sets.filter(s => s.d).map(s => ({w:s.w || 0, r:s.r || 0, wu:!!s.wu, pr:!!s.pr}))})).filter(it => it.sets.length);
-  if (!items.length) { if (confirm('Ни один подход не отмечен. Удалить тренировку?')) { db.active = null; ui.woOpen = false; save(); releaseWake(); render(); } return; }
+  const items = a.items.map(it => ({ex:it.ex, sets:it.sets.filter(s => s.d || (a.wid && s.r > 0)).map(s => ({w:s.w || 0, r:s.r || 0, wu:!!s.wu, pr:!!s.pr}))})).filter(it => it.sets.length);
+  if (!items.length) { if (confirm(a.wid ? 'Не заполнено ни одного подхода. Выйти без сохранения?' : 'Ни один подход не отмечен. Удалить тренировку?')) { db.active = null; ui.woOpen = false; save(); releaseWake(); render(); } return; }
   const left = a.items.reduce((x, it) => x + it.sets.filter(s => !s.d).length, 0);
   if (left && !a.wid && !confirm(`${left} ${plural(left, 'подход не отмечен', 'подхода не отмечены', 'подходов не отмечены')} и не сохранятся. Завершить?`)) return;
   const w = {id:a.wid || uid(), name:a.name.trim() || defName(), start:a.start, end:a.wid ? a.end : Date.now(), tpl:a.tpl, items};
@@ -526,7 +527,7 @@ function finish() {
   recomputePR();
   db.active = null; ui.woOpen = false; save(); releaseWake();
   render();
-  if (!a.wid) openSheet({t:'sum', id:w.id}); else toast('Изменения сохранены');
+  if (!a.wid) openSheet({t:'sum', id:w.id}); else toast(a.back ? `Тренировка за ${fDate(w.start)} добавлена` : 'Изменения сохранены');
 }
 function recomputePR() { // рекорды пересчитываются хронологически — правки и удаления не ломают отметки
   const best = {};
@@ -662,7 +663,7 @@ SH.month = s => {
     </button>`).join('')}</div>` : ''}
   ${M.prs.length ? `<div class="sec"><h2>Рекорды месяца</h2><span class="n acc" style="font-size:24px">${M.prs.length}</span></div><div class="list">${M.prs.slice(0, 8).map(p => `<div class="li" style="min-height:52px"><div class="grow"><div class="t ell">${esc(p.e.name)}</div><div class="s">${fDate(p.t)}</div></div><span class="v n">${fSet(p.st, p.e.k)}<span class="pr">PR</span></span></div>`).join('')}</div>` : ''}
   ${M.ws.length ? `<div class="sec"><h2>Регулярность</h2></div>
-  <div class="mcal">${['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(d => `<span>${d}</span>`).join('')}${'<i></i>'.repeat(off)}${Array.from({length:days}, (_, i) => `<b class="n ${trained.has(i + 1) ? 'on' : ''}">${i + 1}</b>`).join('')}</div>
+  <div class="mcal">${['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(d => `<span>${d}</span>`).join('')}${'<i></i>'.repeat(off)}${Array.from({length:days}, (_, i) => `<b class="n ${trained.has(i + 1) ? 'on' : ''}" data-a="day" data-t="${new Date(M.a).setDate(i + 1)}">${i + 1}</b>`).join('')}</div>
   <p class="note" style="margin-top:12px">Чаще всего — ${DOW[topDow]}. Лучшая неделя: ${M.bestWeek} ${plural(M.bestWeek, 'тренировка', 'тренировки', 'тренировок')}.</p>` : ''}
   ${M.total ? `<div class="sec"><h2>Нагрузка по группам</h2><span class="mut" style="font-size:14px">${M.total} ${plural(M.total, 'подход', 'подхода', 'подходов')}</span></div>
   ${GORDER.filter(g => M.groups[g]).sort((x, y) => M.groups[y] - M.groups[x]).map(g => `<div class="gbar"><span>${GROUPS[g]}</span><i class="mbar"><b style="width:${M.groups[g] / maxG * 100}%"></b></i><span class="n">${Math.round(M.groups[g] / M.total * 100)}%</span></div>`).join('')}` : ''}
@@ -674,7 +675,8 @@ SH.start = () => `<div class="shd"><h3>Новая тренировка</h3></div
   <button class="btn" data-a="startEmpty">Начать с пустого листа</button>
   ${db.workouts[0] ? `<button class="btn sec2" data-a="repeat" data-id="${db.workouts[0].id}" style="margin-top:8px">Повторить «${esc(db.workouts[0].name)}»</button>` : ''}
   ${db.templates.length ? `<div class="lab2">Из шаблона</div><div class="list">${db.templates.map(t => `<button class="li" data-a="startTpl" data-id="${t.id}"><div class="grow" style="min-width:0"><div class="t ell">${esc(t.name || 'Без названия')}</div><div class="s ell">${t.ex.map(id => exById(id).name).join(', ') || 'пусто'}</div></div><span class="go">${ico('play')}</span></button>`).join('')}</div>` : ''}
-  <button class="btn link" data-a="newTpl" style="margin-top:6px">Создать шаблон</button>`;
+  <button class="btn link" data-a="newTpl" style="margin-top:6px">Создать шаблон</button>
+  <button class="btn link" data-a="backOpen" style="margin-top:0">Добавить прошедшую тренировку</button>`;
 
 // видео девушки (Pexels/Mixkit) или два кадра фото, сменяющие друг друга
 function media(e) {
@@ -715,6 +717,21 @@ SH.tplStart = s => {
     return `<button class="pick ${s.sel.includes(id) ? 'on' : ''}" data-a="tsT" data-id="${id}"><div class="grow"><div style="font-size:16.5px;font-weight:500">${esc(e.name)}</div><div class="mut" style="font-size:13.5px">${b ? 'В прошлый раз <span class="n" style="font-size:15px">' + fSet(b, e.k) + '</span>' : GROUPS[e.g]}</div></div><span class="cb">${ico('check')}</span></button>`; }).join('')}
   <div class="stick"><button class="btn" data-a="tsGo" ${s.sel.length ? '' : 'disabled'}>${s.sel.length ? `Начать · ${s.sel.length} ${plural(s.sel.length, 'упражнение', 'упражнения', 'упражнений')}` : 'Отметь упражнения'}</button></div>`;
 };
+SH.day = s => {
+  const ws = db.workouts.filter(w => dayStart(w.start).getTime() === s.d);
+  return `<div class="shd"><div><h3>${cap(fDate(s.d, {weekday:'long', day:'numeric', month:'long'}))}</h3><p>${ws.length ? ws.length + ' ' + plural(ws.length, 'тренировка', 'тренировки', 'тренировок') : 'Тренировок не было'}</p></div></div>
+  ${ws.length ? `<div class="list">${ws.map(w => `<button class="li" data-a="woInfo" data-id="${w.id}"><div class="grow"><div class="t ell">${esc(w.name)}</div><div class="s">${new Date(w.start).toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'})} · ${fDur(w.end - w.start)} · ${volParts(woVol(w)).join(' ')}</div></div>${ico('right', 'chev')}</button>`).join('')}</div>` : ''}
+  <div class="sec" style="margin-top:${ws.length ? 30 : 4}px"><h2>Добавить тренировку за этот день</h2></div>
+  <div class="backrow"><label><span class="lab3">Начало</span><input id="daytime" class="field n" type="time" value="${s.time}"></label>
+    <div><span class="lab3">Длилась</span><div class="opts" style="padding:0">${[30, 45, 60, 75, 90, 120].map(v => `<button class="${s.dur === v ? 'on' : ''}" data-a="dayDur" data-v="${v}">${v % 60 ? v + ' мин' : v / 60 + ' ч'}</button>`).join('')}</div></div></div>
+  <div class="list" style="margin-top:16px">${db.templates.filter(t => t.ex.length).map(t => `<button class="li" data-a="backTpl" data-id="${t.id}"><div class="grow"><div class="t ell">${esc(t.name || 'Без названия')}</div><div class="s">${t.ex.length} ${plural(t.ex.length, 'упражнение', 'упражнения', 'упражнений')}</div></div><span class="go">${ico('plus')}</span></button>`).join('')}
+  <button class="li" data-a="backEmpty"><div class="grow t">Пустая — выберу упражнения сама</div><span class="go">${ico('plus')}</span></button></div>
+  <p class="note" style="margin-top:12px">Просто впиши вес и повторы — галочки не нужны, заполненные подходы сохранятся.</p>`;
+};
+const isoDay = t => { const d = new Date(t); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }; // местная дата, не UTC
+SH.backDate = () => `<div class="shd"><div><h3>Тренировка задним числом</h3><p>Выбери день, когда она была</p></div></div>
+  <input id="backdate" class="field" type="date" max="${isoDay(Date.now())}" value="${isoDay(Date.now() - 864e5)}">
+  <button class="btn" data-a="backPick" style="margin-top:6px">Дальше</button>`;
 SH.wo = s => {
   const w = db.workouts.find(x => x.id === s.id); if (!w) return '<p class="empty">Тренировка удалена</p>';
   const [v, u] = volParts(woVol(w));
@@ -870,6 +887,25 @@ A.hideProblem = () => { loadProblem = ''; render(); };
 A.hideHint = () => { db.settings.hint = false; save(); render(); };
 A.startMenu = () => openSheet({t:'start'});
 A.startEmpty = () => startWo([], '');
+A.backOpen = () => closeSheet().then(() => openSheet({t:'backDate'}));
+A.day = el => {
+  const t = +el.dataset.t, today = dayStart(Date.now()).getTime();
+  if (t > today) return toast('Этот день ещё впереди');
+  const ws = db.workouts.filter(w => dayStart(w.start).getTime() === t);
+  if (ws.length === 1 && t < today) return openSheet({t:'wo', id:ws[0].id, full:true});
+  openSheet({t:'day', d:t, time:'18:00', dur:60, full:ws.length > 0});
+};
+A.dayDur = el => { const s = topS(); s.time = $('#daytime').value || s.time; s.dur = +el.dataset.v; refreshTop(); };
+const backRange = s => { const [h, m] = (($('#daytime') && $('#daytime').value) || s.time).split(':').map(Number); const st = new Date(s.d); st.setHours(h || 0, m || 0, 0, 0); return {start:st.getTime(), end:st.getTime() + s.dur * 60000}; };
+A.backTpl = el => {
+  const s = topS(), t = db.templates.find(x => x.id === el.dataset.id), back = backRange(s);
+  if (!t || !t.ex.length) return;
+  if (t.ex.length <= 5) return startWo(t.ex, t.name, t.id, back);
+  const last = db.workouts.find(w => w.tpl === t.id);
+  openSheet({t:'tplStart', id:t.id, sel:last ? t.ex.filter(id => last.items.some(i => i.ex === id)) : [], full:true, back});
+};
+A.backEmpty = () => startWo([], '', null, backRange(topS()));
+A.backPick = () => { const v = $('#backdate').value; if (!v) return toast('Выбери дату'); const [y, m, d] = v.split('-').map(Number); const t = new Date(y, m - 1, d).getTime(); if (t > Date.now()) return toast('Этот день ещё впереди'); closeSheet().then(() => openSheet({t:'day', d:t, time:'18:00', dur:60})); };
 A.startTpl = el => {
   const t = db.templates.find(x => x.id === el.dataset.id); if (!t || !t.ex.length) return;
   if (t.ex.length <= 5) return startWo(t.ex, t.name, t.id);
@@ -880,7 +916,7 @@ A.startTpl = el => {
 };
 A.tsT = el => { const s = topS(), id = el.dataset.id, i = s.sel.indexOf(id); i < 0 ? s.sel.push(id) : s.sel.splice(i, 1); refreshTop(); };
 A.tsAll = () => { const s = topS(), t = db.templates.find(x => x.id === s.id); s.sel = s.sel.length === t.ex.length ? [] : [...t.ex]; refreshTop(); };
-A.tsGo = () => { const s = topS(), t = db.templates.find(x => x.id === s.id); startWo(t.ex.filter(id => s.sel.includes(id)), t.name, t.id); };
+A.tsGo = () => { const s = topS(), t = db.templates.find(x => x.id === s.id); startWo(t.ex.filter(id => s.sel.includes(id)), t.name, t.id, s.back); };
 A.repeat = el => { const w = db.workouts.find(x => x.id === el.dataset.id); if (w) startWo(w.items.map(i => i.ex), w.name, w.tpl); };
 A.openWo = () => { ui.woOpen = true; ui.sheets = []; render(); wake(); };
 A.minWo = () => { ui.woOpen = false; render(); };
